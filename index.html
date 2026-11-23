@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="用照片收藏生活、旅行与沿途风景。">
+  <title>拾光相册</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="#top"><span class="camera-mark" aria-hidden="true"></span>拾光相册</a>
+      <form class="search" role="search">
+        <span class="search-mark" aria-hidden="true"></span>
+        <input id="search" type="search" aria-label="搜索照片标题或标签" placeholder="搜索标题或标签" autocomplete="off">
+      </form>
+      <button class="import-button" id="import-button" type="button" aria-describedby="import-help">
+        <span aria-hidden="true" class="folder-mark"></span>读取照片清单
+      </button>
+      <input id="file-input" type="file" accept=".json,application/json" hidden>
+    </div>
+  </header>
+
+  <main id="top" class="shell">
+    <section class="cover" aria-labelledby="page-title">
+      <div class="cover-copy">
+        <h1 id="page-title">拾光相册</h1>
+        <p>用照片收藏日常与远方。</p>
+      </div>
+    </section>
+
+    <section class="gallery" aria-labelledby="gallery-title">
+      <div class="gallery-heading">
+        <h2 id="gallery-title">照片墙</h2>
+        <p class="count" id="count" role="status"></p>
+      </div>
+      <p id="import-help" class="import-help">私人相册先读取清单，再选择本机 photos 文件夹。私人照片仅用于当前页面预览。</p>
+      <div class="privacy-tools">
+        <button id="add-photo" class="text-button primary-button" type="button">添加照片</button>
+        <button id="import-archive" class="text-button" type="button">导入私人 ZIP</button>
+        <input id="archive-input" type="file" accept=".zip,application/zip" hidden>
+        <button id="select-folder" class="text-button" type="button">选择 photos 文件夹</button>
+        <button id="export-private" class="text-button" type="button" hidden>导出私人存档</button>
+        <button id="clear-private" class="text-button" type="button" hidden>清除私人预览</button>
+        <input id="folder-input" type="file" webkitdirectory multiple hidden>
+        <span id="private-status" class="import-help" role="status">当前展示示例相册</span>
+      </div>
+      <p id="export-help" class="import-help" hidden>导出包包含原图及原有的拍摄信息，请保存在私人目录。</p>
+      <div class="filters" id="filters" role="group" aria-label="按分类筛选"></div>
+      <div class="gallery-tools">
+        <label class="select-field">年份
+          <select id="year"><option value="">全部年份</option></select>
+        </label>
+        <label class="select-field">排序
+          <select id="sort">
+            <option value="newest">拍摄日期 · 从新到旧</option>
+            <option value="oldest">拍摄日期 · 从旧到新</option>
+            <option value="title">照片标题 · 升序</option>
+          </select>
+        </label>
+        <button id="reset-filters" class="text-button" type="button" disabled>清除筛选</button>
+      </div>
+      <p id="import-status" class="import-status" role="status" hidden></p>
+      <p id="load-error" class="load-error" role="alert" hidden></p>
+      <button id="retry-load" class="text-button retry-load" type="button" hidden>重新读取清单</button>
+      <p id="empty" class="empty" hidden></p>
+      <div id="grid" class="grid"></div>
+      <noscript><p class="empty">请启用 JavaScript 查看照片。</p></noscript>
+    </section>
+  </main>
+
+  <footer class="shell site-footer">
+    <span>拾光相册</span>
+    <a href="#top">返回顶部 <span aria-hidden="true">↑</span></a>
+  </footer>
+
+  <template id="photo-template">
+    <article class="card">
+      <button type="button" class="photo-button" aria-haspopup="dialog">
+        <span class="photo-frame">
+          <img alt="" decoding="async">
+          <span class="image-error" hidden>照片无法显示</span>
+          <span class="expand-mark" aria-hidden="true">＋</span>
+        </span>
+        <span class="card-copy">
+          <span class="card-title"></span>
+          <time></time>
+        </span>
+        <span class="card-category"></span>
+      </button>
+    </article>
+  </template>
+
+  <dialog id="add-dialog" class="add-dialog" aria-labelledby="add-title">
+    <form id="add-form">
+      <div class="add-heading">
+        <h2 id="add-title">添加照片</h2>
+        <button id="cancel-add" class="text-button" type="button">取消</button>
+      </div>
+      <p class="import-help">照片在本机预览。添加后请导出私人存档，保存到硬盘。</p>
+      <fieldset id="add-fields">
+        <label>选择照片
+          <input id="new-photo" type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.avif,.bmp" required>
+        </label>
+        <label>标题<input id="new-title" type="text" required autocomplete="off"></label>
+        <div class="add-columns">
+          <label>分类<input id="new-category" type="text" list="category-options" required autocomplete="off"></label>
+          <label>拍摄日期<input id="new-date" type="date" required></label>
+        </div>
+        <datalist id="category-options"></datalist>
+        <label>标签<input id="new-tags" type="text" placeholder="用逗号分隔，例如 日常,周末" autocomplete="off"></label>
+      </fieldset>
+      <p id="add-error" class="load-error" role="alert" hidden></p>
+      <p id="add-status" class="import-status" role="status" hidden></p>
+      <button id="save-add" class="text-button primary-button" type="submit">加入当前相册</button>
+    </form>
+  </dialog>
+
+  <dialog class="lightbox" id="lightbox" aria-labelledby="lightbox-title">
+    <div class="lightbox-panel">
+      <button class="icon-button close-button" id="close" type="button" aria-label="关闭大图" autofocus>×</button>
+      <div class="lightbox-stage">
+        <img id="large-image" alt="" draggable="false">
+        <p id="large-loading" class="large-loading" role="status" hidden>正在加载照片…</p>
+        <div id="large-error" class="large-error" role="status" hidden>
+          <p>照片无法显示，请检查文件是否存在及路径大小写。</p>
+          <button id="retry-image" class="text-button" type="button">重新加载照片</button>
+        </div>
+        <button class="icon-button previous" id="previous" type="button" aria-label="上一张">‹</button>
+        <button class="icon-button next" id="next" type="button" aria-label="下一张">›</button>
+      </div>
+      <div id="lightbox-tags" class="lightbox-tags" role="group" aria-label="照片标签"></div>
+      <div class="lightbox-caption">
+        <div aria-live="polite">
+          <h2 id="lightbox-title"></h2>
+          <time id="lightbox-date"></time>
+        </div>
+        <span id="lightbox-position"></span>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>
