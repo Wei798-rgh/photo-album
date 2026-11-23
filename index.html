@@ -2,13 +2,14 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; script-src-attr 'none'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="description" content="用照片收藏生活、旅行与沿途风景。">
   <title>拾光相册</title>
   <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/exifr/dist/full.umd.js" async></script>
   <script src="script.js" defer></script>
 </head>
 <body>
@@ -39,8 +40,17 @@
         <h2 id="gallery-title">照片墙</h2>
         <p class="count" id="count" role="status"></p>
       </div>
+      <div class="view-switch" role="group" aria-label="选择相册视图">
+        <button type="button" id="wall-view" class="text-button" aria-pressed="true">照片墙</button>
+        <button type="button" id="timeline-view" class="text-button" aria-pressed="false">拾光时间线</button>
+      </div>
       <p id="import-help" class="import-help">私人相册先读取清单，再选择本机 photos 文件夹。私人照片仅用于当前页面预览。</p>
+      <p class="import-help">照片只存在你自己的浏览器里，不上传服务器。清理浏览器数据可能删除相册，请定期导出私人存档。</p>
       <div class="privacy-tools">
+        <button id="batch-button" class="text-button primary-button" type="button">批量添加照片</button>
+        <input id="batch-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif,image/bmp" multiple hidden>
+        <button id="batch-folder-button" class="text-button" type="button">导入照片文件夹</button>
+        <input id="batch-folder" type="file" webkitdirectory multiple hidden>
         <button id="add-photo" class="text-button primary-button" type="button">添加照片</button>
         <button id="import-archive" class="text-button" type="button">导入私人 ZIP</button>
         <input id="archive-input" type="file" accept=".zip,application/zip" hidden>
@@ -50,6 +60,8 @@
         <input id="folder-input" type="file" webkitdirectory multiple hidden>
         <span id="private-status" class="import-help" role="status">当前展示示例相册</span>
       </div>
+      <div id="drop-photos" class="drop-photos" tabindex="0">将照片拖到这里导入</div>
+      <p id="batch-status" class="import-status" role="status"></p>
       <p id="export-help" class="import-help" hidden>导出包包含原图及原有的拍摄信息，请保存在私人目录。</p>
       <div class="filters" id="filters" role="group" aria-label="按分类筛选"></div>
       <div class="gallery-tools">
@@ -70,6 +82,11 @@
       <button id="retry-load" class="text-button retry-load" type="button" hidden>重新读取清单</button>
       <p id="empty" class="empty" hidden></p>
       <div id="grid" class="grid"></div>
+      <section id="timeline" class="timeline" aria-label="拾光时间线" hidden>
+        <h2>拾光时间线</h2>
+        <div id="year-summary" class="year-summary"></div>
+        <div id="timeline-groups"></div>
+      </section>
       <noscript><p class="empty">请启用 JavaScript 查看照片。</p></noscript>
     </section>
   </main>
@@ -141,6 +158,14 @@
           <time id="lightbox-date"></time>
         </div>
         <span id="lightbox-position"></span>
+      </div>
+      <div class="photo-actions">
+        <label>分类
+          <select id="photo-category">
+            <option>生活</option><option>旅行</option><option>风景</option><option>截图</option><option>成长</option>
+          </select>
+        </label>
+        <button type="button" class="text-button" id="milestone" aria-pressed="false">标记里程碑</button>
       </div>
     </div>
   </dialog>

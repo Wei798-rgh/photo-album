@@ -39,6 +39,8 @@ const folderInput = document.querySelector("#folder-input");
 const privateStatus = document.querySelector("#private-status");
 const clearPrivate = document.querySelector("#clear-private");
 const privateFiles = new Map();
+const storedFiles = new Map();
+const storedKeys = new Set();
 const privateUrls = new Map();
 const imageExtensions = /\.(?:jpe?g|png|webp|gif|avif|bmp)$/i;
 const imageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/bmp"]);
@@ -70,6 +72,9 @@ let hasLocalManifest = false;
 let addVersion = 0;
 let exportVersion = 0;
 let exportBusy = false;
+let database = null;
+let viewMode = "wall";
+let importing = false;
 
 function isText(value) {
   return typeof value === "string" && value.trim().length > 0;
@@ -85,13 +90,14 @@ function normalizePhotos(records) {
   if (!Array.isArray(records)) throw new Error("照片清单必须是 JSON 数组。");
 
   return records.map((record, index) => {
-    const {file, title, category, tags, date} = record ?? {};
+    const {file, title, category, tags, date, milestone = false, dateSource = "unknown", travelCandidate = false} = record ?? {};
     const parts = typeof file === "string" ? file.split("/") : [];
     const validPath = parts[0] === "photos" && parts.length >= 3 &&
       parts.every(part => isText(part) && part !== "." && part !== ".." && !/[\\:\u0000-\u001f]/.test(part));
 
     if (!validPath || (!imageExtensions.test(file) && !samplePaths.has(file)) || !isText(title) || !isText(category) ||
-        !Array.isArray(tags) || !tags.every(isText) || !validDate(date)) {
+        !Array.isArray(tags) || !tags.every(isText) || !validDate(date) || typeof milestone !== "boolean" ||
+        typeof travelCandidate !== "boolean" || !["unknown", "exif", "modified"].includes(dateSource)) {
       throw new Error(`第 ${index + 1} 条记录有误，请检查图片路径、标题、分类、标签和日期。`);
     }
 
@@ -99,6 +105,9 @@ function normalizePhotos(records) {
       title: title.trim(),
       category: category.trim(),
       date,
+      milestone,
+      dateSource,
+      travelCandidate,
       file,
       private: parts[1].toLowerCase() === "private",
       tags: [...new Set(tags.map(tag => tag.trim()))],
@@ -225,6 +234,7 @@ function renderGrid() {
     fragment.append(card);
   });
   grid.replaceChildren(fragment);
+  renderTimeline();
   count.textContent = `${visiblePhotos.length} / ${photos.length} 张照片`;
   resetFilters.disabled = activeCategory === null && !year.value && !query;
   empty.hidden = visiblePhotos.length > 0;
@@ -276,6 +286,15 @@ function updateLightbox() {
   largeTitle.textContent = photo.title;
   setDate(largeDate, photo.date);
   position.textContent = `${currentIndex + 1} / ${visiblePhotos.length}`;
+  const categorySelect = document.querySelector("#photo-category");
+  const categoryOption = [...categorySelect.options].find(option => option.value === photo.category);
+  if (!categoryOption) categorySelect.add(new Option(photo.category, photo.category));
+  categorySelect.value = photo.category;
+  categorySelect.disabled = !photo.private || !privateFiles.has(photo.file) || !database;
+  const milestoneButton = document.querySelector("#milestone");
+  milestoneButton.disabled = categorySelect.disabled;
+  milestoneButton.setAttribute("aria-pressed", String(photo.milestone));
+  milestoneButton.textContent = photo.milestone ? "取消里程碑" : "标记里程碑";
   previous.hidden = next.hidden = visiblePhotos.length < 2;
   lightboxTags.replaceChildren();
   for (const tag of photo.tags) {
@@ -427,6 +446,7 @@ folderInput.addEventListener("change", () => {
     }
   }
   for (const [path, file] of sessionAdditions) privateFiles.set(path, file);
+  for (const [path, file] of storedFiles) privateFiles.set(path, file);
   ++exportVersion;
   loadError.hidden = true;
   renderGrid();
@@ -446,6 +466,7 @@ function clearPrivatePreview() {
   position.textContent = "";
   revokePrivateUrls();
   privateFiles.clear();
+  storedFiles.clear();
   sessionAdditions.clear();
   releaseDownloads();
   addDialog.close();
@@ -464,6 +485,7 @@ window.addEventListener("pagehide", () => {
   ++exportVersion;
   revokePrivateUrls();
   privateFiles.clear();
+  storedFiles.clear();
   sessionAdditions.clear();
   releaseDownloads();
 });
@@ -472,9 +494,193 @@ window.addEventListener("pageshow", event => {
 });
 
 function photoRecord(photo) {
-  const {file, title, category, tags, date} = photo;
-  return {file, title, category, tags: [...tags], date};
+  const {file, title, category, tags, date, milestone, dateSource, travelCandidate} = photo;
+  return {file, title, category, tags: [...tags], date, milestone, dateSource, travelCandidate};
 }
+
+function renderTimeline() {
+  const groups = document.querySelector("#timeline-groups");
+  const summaries = document.querySelector("#year-summary");
+  groups.replaceChildren();
+  summaries.replaceChildren();
+  const years = new Map();
+  for (const photo of [...visiblePhotos].sort((a, b) => b.date.localeCompare(a.date))) {
+    const y = photo.date.slice(0, 4);
+    const m = photo.date.slice(5, 7);
+    if (!years.has(y)) years.set(y, new Map());
+    const months = years.get(y);
+    if (!months.has(m)) months.set(m, []);
+    months.get(m).push(photo);
+  }
+  for (const [y, months] of years) {
+    const all = [...months.values()].flat();
+    const busiest = [...months.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))[0];
+    const summary = document.createElement("article");
+    const heading = document.createElement("h3");
+    heading.textContent = y + " 年";
+    const detail = document.createElement("p");
+    detail.textContent = `${all.length} 张照片 · 最热闹 ${Number(busiest[0])} 月（${busiest[1].length} 张） · ${all.filter(photo => photo.milestone).length} 个里程碑`;
+    summary.append(heading, detail);
+    summaries.append(summary);
+    const yearSection = document.createElement("section");
+    yearSection.className = "timeline-year";
+    const title = document.createElement("h3");
+    title.textContent = y + " 年";
+    yearSection.append(title);
+    for (const [month, monthPhotos] of months) {
+      const section = document.createElement("section");
+      section.className = "timeline-month";
+      const monthTitle = document.createElement("h4");
+      monthTitle.textContent = Number(month) + " 月 · " + monthPhotos.length + " 张";
+      const cards = document.createElement("div");
+      cards.className = "grid";
+      for (const photo of monthPhotos) {
+        const index = visiblePhotos.indexOf(photo);
+        const card = grid.children[index].cloneNode(true);
+        if (photo.milestone) {
+          card.classList.add("milestone-card");
+          const badge = document.createElement("span");
+          badge.className = "milestone-label";
+          badge.textContent = "★ 里程碑";
+          card.querySelector(".card-copy").append(badge);
+        }
+        card.querySelector(".photo-button").addEventListener("click", event => openLightbox(index, event.currentTarget));
+        cards.append(card);
+      }
+      section.append(monthTitle, cards);
+      yearSection.append(section);
+    }
+    groups.append(yearSection);
+  }
+}
+
+for (const [id, mode] of [["wall-view", "wall"], ["timeline-view", "timeline"]]) {
+  document.querySelector("#" + id).addEventListener("click", () => {
+    viewMode = mode;
+    grid.hidden = mode !== "wall";
+    document.querySelector("#timeline").hidden = mode !== "timeline";
+    document.querySelector("#wall-view").setAttribute("aria-pressed", String(mode === "wall"));
+    document.querySelector("#timeline-view").setAttribute("aria-pressed", String(mode === "timeline"));
+  });
+}
+
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("shiguang-album", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("photos", {keyPath: "file"});
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error("数据库被其他页面占用，请关闭其他相册页面后重试。"));
+  });
+}
+
+function storePhotos(entries, replace = false) {
+  return new Promise((resolve, reject) => {
+    if (!database) { reject(new Error("浏览器本地存储不可用")); return; }
+    const transaction = database.transaction("photos", "readwrite");
+    const store = transaction.objectStore("photos");
+    entries.forEach(entry => replace ? store.put(entry) : store.add(entry));
+    transaction.oncomplete = () => {
+      entries.forEach(entry => storedKeys.add(entry.file.toLowerCase()));
+      resolve();
+    };
+    transaction.onabort = transaction.onerror = () => reject(transaction.error || new Error("本地存储失败"));
+  });
+}
+
+async function updatePhoto(changes) {
+  const photo = visiblePhotos[currentIndex];
+  const file = privateFiles.get(photo.file);
+  if (!file) return;
+  const record = {...photoRecord(photo), ...changes};
+  try {
+    await storePhotos([{...record, blob: file}], true);
+    Object.assign(photo, changes);
+    ++exportVersion;
+    renderFilters();
+    renderGrid();
+    currentIndex = visiblePhotos.findIndex(item => item.file === record.file);
+    if (currentIndex < 0) lightbox.close();
+    else updateLightbox();
+  } catch (error) { showError("保存照片信息失败：" + error.message); }
+}
+document.querySelector("#photo-category").addEventListener("change", event => updatePhoto({category: event.target.value}));
+document.querySelector("#milestone").addEventListener("click", () => updatePhoto({milestone: !visiblePhotos[currentIndex].milestone}));
+
+function localDate(date) {
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+}
+
+async function importBatch(selected) {
+  if (importing) return;
+  const status = document.querySelector("#batch-status");
+  const files = [...selected].filter(file => imageExtensions.test(file.name) && (!file.type || imageTypes.has(file.type)));
+  if (!files.length) { status.textContent = "没有找到支持的照片。"; return; }
+  if (!window.exifr) { status.textContent = "EXIF 库未能加载，请连接网络并刷新页面后重试，未导入照片。"; return; }
+  if (!database) { status.textContent = "本地数据库不可用，照片未导入。"; return; }
+  importing = true;
+  const additions = [];
+  const reserved = new Set([...storedKeys, ...photos.map(photo => photo.file.toLowerCase())]);
+  let failed = 0;
+  try {
+    for (let index = 0; index < files.length; index++) {
+      const file = files[index];
+      status.textContent = `正在读取 ${index + 1} / ${files.length}…`;
+      let metadata;
+      try { metadata = await exifr.parse(file, {gps: true}); } catch { metadata = null; }
+      const date = metadata?.DateTimeOriginal instanceof Date && Number.isFinite(metadata.DateTimeOriginal.getTime())
+        ? metadata.DateTimeOriginal : new Date(file.lastModified);
+      const dateString = localDate(date);
+      if (!validDate(dateString)) { failed++; continue; }
+      const url = URL.createObjectURL(file);
+      let width, height;
+      try {
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+        width = image.naturalWidth;
+        height = image.naturalHeight;
+      } catch { failed++; continue; }
+      finally { URL.revokeObjectURL(url); }
+      const screenshot = /截图|screenshot/i.test(file.name) || Math.max(width / height, height / width) >= 3;
+      const travelCandidate = Number.isFinite(metadata?.latitude) && Number.isFinite(metadata?.longitude);
+      const category = screenshot ? "截图" : travelCandidate ? "旅行" : "生活";
+      let path = newPrivatePath(file, category);
+      const extension = path.slice(path.lastIndexOf("."));
+      const stem = path.slice(0, -extension.length);
+      let suffix = 2;
+      while (reserved.has(path.toLowerCase())) path = stem + "-" + suffix++ + extension;
+      reserved.add(path.toLowerCase());
+      additions.push({file:path, title:file.name.replace(/\.[^.]+$/, "") || "未命名", category, tags:[],
+        date:dateString, milestone:false, dateSource:metadata?.DateTimeOriginal === date ? "exif" : "modified",
+        travelCandidate, blob:file});
+    }
+    if (!additions.length) { status.textContent = "没有可导入的照片，请检查文件格式。"; return; }
+    const records = [...photos.map(photoRecord), ...additions.map(({blob, ...record}) => record)];
+    normalizePhotos(records);
+    await storePhotos(additions);
+    for (const entry of additions) { privateFiles.set(entry.file, entry.blob); storedFiles.set(entry.file, entry.blob); }
+    hasLocalManifest = true;
+    setPhotos(records);
+    status.textContent = `已保存 ${additions.length} 张到本机浏览器${failed ? `，${failed} 张无法读取` : ""}。`;
+  } catch (error) {
+    status.textContent = "导入未完成：" + error.message + "。请检查浏览器存储空间。";
+  } finally { importing = false; }
+}
+
+for (const [button, input] of [["batch-button", "batch-input"], ["batch-folder-button", "batch-folder"]]) {
+  const field = document.querySelector("#" + input);
+  document.querySelector("#" + button).addEventListener("click", () => field.click());
+  field.addEventListener("change", () => { const files = [...field.files]; field.value = ""; if (files.length) importBatch(files); });
+}
+const dropZone = document.querySelector("#drop-photos");
+dropZone.addEventListener("dragover", event => { event.preventDefault(); dropZone.classList.add("dragging"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragging"));
+dropZone.addEventListener("drop", event => {
+  event.preventDefault();
+  dropZone.classList.remove("dragging");
+  importBatch(event.dataTransfer.files);
+});
 
 function safeFilePart(value) {
   const cleaned = value.normalize("NFC").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
@@ -490,7 +696,7 @@ function newPrivatePath(file, category) {
   const extension = file.name.slice(dot);
   const filename = stem + extension;
   const directory = "photos/private/" + safeFilePart(category) + "/";
-  const occupied = new Set([...photos.map(photo => photo.file), ...privateFiles.keys()]
+  const occupied = new Set([...photos.map(photo => photo.file), ...privateFiles.keys(), ...storedKeys]
     .map(path => path.normalize("NFC").toLowerCase()));
   let path = directory + filename;
   let suffix = 2;
@@ -557,7 +763,10 @@ addForm.addEventListener("submit", async event => {
       URL.revokeObjectURL(url);
     }
     if (version !== addVersion || !addDialog.open) return;
+    await storePhotos([{...record, milestone:false, dateSource:"unknown", travelCandidate:false, blob:file}]);
+    if (version !== addVersion || !addDialog.open) return;
     privateFiles.set(record.file, file);
+    storedFiles.set(record.file, file);
     sessionAdditions.set(record.file, file);
     hasLocalManifest = true;
     setPhotos(records);
@@ -761,16 +970,36 @@ archiveInput.addEventListener("change", async () => {
       if (version !== loadVersion) throw new DOMException("导入已取消", "AbortError");
     });
     if (version !== loadVersion) return;
+    const existing = new Map(photos.filter(photo => photo.private).map(photo => [photo.file.toLowerCase(), photo]));
+    const changes = [];
+    const remapped = new Map();
+    const reserved = new Set([...existing.keys(), ...storedKeys]);
+    for (const record of restored.records) {
+      if (remapped.has(record.file)) continue;
+      let path = record.file;
+      const extension = path.slice(path.lastIndexOf("."));
+      const stem = path.slice(0, -extension.length);
+      let suffix = 2;
+      while (reserved.has(path.toLowerCase())) path = stem + "-" + suffix++ + extension;
+      reserved.add(path.toLowerCase());
+      remapped.set(record.file, path);
+    }
+    const imported = restored.records.map(record => ({...record, file:remapped.get(record.file)}));
+    for (const record of imported) {
+      if (!changes.some(entry => entry.file === record.file)) {
+        changes.push({...record, blob:restored.files.get([...remapped].find(([, path]) => path === record.file)[0])});
+      }
+    }
+    await storePhotos(changes);
+    if (version !== loadVersion) return;
     ++imageVersion;
     lightbox.close();
     largeImage.removeAttribute("src");
     revokePrivateUrls();
-    privateFiles.clear();
-    sessionAdditions.clear();
-    for (const [path, image] of restored.files) privateFiles.set(path, image);
+    for (const entry of changes) { privateFiles.set(entry.file, entry.blob); storedFiles.set(entry.file, entry.blob); }
     hasLocalManifest = true;
-    setPhotos(restored.records);
-    importStatus.textContent = `已在本机导入 ${photos.length} 张私人照片。刷新前可再次导出存档保存。`;
+    setPhotos([...photos.map(photoRecord), ...imported]);
+    importStatus.textContent = `已在本机导入 ${imported.length} 张私人照片。`;
     importStatus.hidden = false;
   } catch (error) {
     if (version !== loadVersion) return;
@@ -832,12 +1061,41 @@ exportPrivate.addEventListener("click", async () => {
   }
 });
 
-function initialize() {
-  if (location.protocol === "file:") {
-    setPhotos(demoPhotos);
-    return;
+async function initialize() {
+  let initial = demoPhotos;
+  let manifestError = "";
+  if (location.protocol !== "file:") {
+    try {
+      const response = await fetch("./photos.json", {cache:"no-store", credentials:"omit", mode:"same-origin", redirect:"error", referrerPolicy:"no-referrer"});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      initial = await response.json();
+      if (normalizePhotos(initial).some(photo => photo.private)) throw new Error("默认清单不能包含私人照片");
+    } catch (error) {
+      initial = demoPhotos;
+      manifestError = "读取默认清单失败：" + error.message;
+    }
   }
-  readManifest();
+  try {
+    database = await openDatabase();
+    database.onversionchange = () => { database.close(); database = null; };
+    const saved = await new Promise((resolve, reject) => {
+      const transaction = database.transaction("photos", "readonly");
+      const request = transaction.objectStore("photos").getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    for (const entry of saved) {
+      privateFiles.set(entry.file, entry.blob);
+      storedFiles.set(entry.file, entry.blob);
+      storedKeys.add(entry.file.toLowerCase());
+    }
+    hasLocalManifest = saved.length > 0;
+    setPhotos([...initial, ...saved.map(({blob, ...record}) => record)]);
+    if (manifestError) showError(manifestError);
+  } catch (error) {
+    setPhotos(initial);
+    showError("浏览器本地存储不可用：" + error.message + "。批量导入需要本地存储权限。");
+  }
 }
 
 initialize();

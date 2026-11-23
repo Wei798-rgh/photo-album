@@ -170,6 +170,24 @@ button:focus-visible, a:focus-visible, select:focus-visible {
 .retry-load { margin-bottom: 16px; }
 .privacy-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
 .privacy-tools .import-help { margin: 0; }
+.drop-photos { margin-top: 14px; padding: 18px; border: 1px dashed #82976b; border-radius: 10px; color: var(--muted); text-align: center; }
+.drop-photos.dragging { border-color: var(--accent); background: #273322; color: var(--text); }
+.view-switch { display:flex; gap:8px; margin-top:20px; }
+.view-switch [aria-pressed="true"] { background:var(--accent); color:#242c19; }
+.year-summary { display:flex; gap:12px; overflow:auto; margin:16px 0 28px; }
+.year-summary article { flex:0 0 230px; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+.year-summary h3, .year-summary p { margin:0 0 8px; }
+.year-summary p { color:var(--muted); font-size:.875rem; }
+.timeline-year { border-left:1px solid #6c8060; padding-left:24px; margin-left:12px; }
+.timeline-month { position:relative; margin-bottom:30px; }
+.timeline-month::before { content:""; position:absolute; top:8px; left:-31px; width:13px; height:13px; border-radius:50%; background:var(--accent); }
+.timeline-month .grid { margin-top:12px; }
+.timeline-month .milestone-card { grid-column:span 2; }
+.milestone-label { display:inline-block; color:var(--accent); margin-top:5px; font-size:.8rem; }
+.photo-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:0 22px 18px; }
+.photo-actions label { display:flex; align-items:center; gap:8px; color:var(--muted); }
+.photo-actions select { min-height:42px; padding:6px; background:var(--bg); border:1px solid var(--line); border-radius:7px; color:var(--text); }
+.photo-actions [aria-pressed="true"] { background:var(--accent); color:#242c19; }
 .primary-button { background: var(--accent); color: #242c19; font-weight: 700; }
 .primary-button:enabled:hover { background: #e3f5b6; }
 .add-dialog {
