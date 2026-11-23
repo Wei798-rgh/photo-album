@@ -1,0 +1,17 @@
+# Deny all photos and personal manifests. Only these three placeholders may be tracked.
+/photos/**
+!/photos/生活/
+!/photos/生活/sample.svg
+!/photos/旅行/
+!/photos/旅行/sample.svg
+!/photos/风景/
+!/photos/风景/sample.svg
+
+# Private archives and local state must stay off GitHub.
+*.zip
+*.ZIP
+/photos/private/
+/private/
+/downloads/
+.DS_Store
+Thumbs.db
