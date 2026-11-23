@@ -611,12 +611,96 @@ function localDate(date) {
   return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
 }
 
+// Read only JPEG APP1 metadata; malformed or unsupported EXIF is treated as absent.
+async function readLocalExif(file) {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length < 4 || view.getUint16(0) !== 0xffd8) return {};
+    let pos = 2;
+    while (pos + 4 <= bytes.length) {
+      if (bytes[pos++] !== 0xff) break;
+      while (pos < bytes.length && bytes[pos] === 0xff) pos++;
+      const marker = bytes[pos++];
+      if (marker === 0xda || marker === 0xd9) break;
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+      if (pos + 2 > bytes.length) break;
+      const length = view.getUint16(pos);
+      if (length < 2 || pos + length > bytes.length) break;
+      const end = pos + length;
+      if (marker === 0xe1 && length >= 16 && bytes[pos + 2] === 0x45 && bytes[pos + 3] === 0x78 &&
+          bytes[pos + 4] === 0x69 && bytes[pos + 5] === 0x66 && bytes[pos + 6] === 0 && bytes[pos + 7] === 0) {
+        const base = pos + 8;
+        const order = view.getUint16(base);
+        if (order !== 0x4949 && order !== 0x4d4d) return {};
+        const le = order === 0x4949;
+        const inside = (at, size) => Number.isSafeInteger(at) && at >= base && size >= 0 && at + size <= end;
+        const u16 = at => { if (!inside(at, 2)) throw new Error("Invalid EXIF"); return view.getUint16(at, le); };
+        const u32 = at => { if (!inside(at, 4)) throw new Error("Invalid EXIF"); return view.getUint32(at, le); };
+        if (u16(base + 2) !== 42) return {};
+        const entries = offset => {
+          const start = base + offset;
+          const count = u16(start);
+          if (!inside(start + 2, count * 12 + 4)) throw new Error("Invalid IFD");
+          const result = new Map();
+          for (let i = 0; i < count; i++) {
+            const at = start + 2 + i * 12;
+            result.set(u16(at), {type: u16(at + 2), count: u32(at + 4), at: at + 8});
+          }
+          return result;
+        };
+        const pointer = entry => entry && entry.type === 4 && entry.count === 1 ? u32(entry.at) : 0;
+        const dataAt = (entry, size) => {
+          const at = size <= 4 ? entry.at : base + u32(entry.at);
+          if (!inside(at, size)) throw new Error("Invalid EXIF value");
+          return at;
+        };
+        const ascii = entry => {
+          if (!entry || entry.type !== 2 || entry.count > end - base) return "";
+          const at = dataAt(entry, entry.count);
+          return String.fromCharCode(...bytes.subarray(at, at + Math.min(entry.count, 64))).replace(/\0.*$/, "");
+        };
+        const root = entries(u32(base + 4));
+        const exifOffset = pointer(root.get(0x8769));
+        const gpsOffset = pointer(root.get(0x8825));
+        const result = {};
+        if (exifOffset) {
+          const value = ascii(entries(exifOffset).get(0x9003));
+          const match = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(value);
+          if (match) {
+            const [, y, m, d, h, min, s] = match.map(Number);
+            const date = new Date(y, m - 1, d, h, min, s);
+            if (y >= 100 && date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d &&
+                date.getHours() === h && date.getMinutes() === min && date.getSeconds() === s) result.DateTimeOriginal = date;
+          }
+        }
+        if (gpsOffset) {
+          const gps = entries(gpsOffset);
+          const coordinate = (tag, refTag, positive, negative, limit) => {
+            const entry = gps.get(tag), ref = ascii(gps.get(refTag));
+            if (!entry || entry.type !== 5 || entry.count !== 3 || ![positive, negative].includes(ref)) return undefined;
+            const at = dataAt(entry, 24);
+            const parts = [0, 8, 16].map(i => u32(at + i) / u32(at + i + 4));
+            if (!parts.every(Number.isFinite) || parts[1] >= 60 || parts[2] >= 60) return undefined;
+            const value = parts[0] + parts[1] / 60 + parts[2] / 3600;
+            return value <= limit ? value * (ref === negative ? -1 : 1) : undefined;
+          };
+          result.latitude = coordinate(2, 1, "N", "S", 90);
+          result.longitude = coordinate(4, 3, "E", "W", 180);
+        }
+        return result;
+      }
+      pos = end;
+    }
+  } catch { /* Broken metadata must never prevent importing a readable image. */ }
+  return {};
+}
+
 async function importBatch(selected) {
   if (importing) return;
   const status = document.querySelector("#batch-status");
   const files = [...selected].filter(file => imageExtensions.test(file.name) && (!file.type || imageTypes.has(file.type)));
   if (!files.length) { status.textContent = "没有找到支持的照片。"; return; }
-  if (!window.exifr) { status.textContent = "EXIF 库未能加载，请连接网络并刷新页面后重试，未导入照片。"; return; }
   if (!database) { status.textContent = "本地数据库不可用，照片未导入。"; return; }
   importing = true;
   const additions = [];
@@ -626,8 +710,7 @@ async function importBatch(selected) {
     for (let index = 0; index < files.length; index++) {
       const file = files[index];
       status.textContent = `正在读取 ${index + 1} / ${files.length}…`;
-      let metadata;
-      try { metadata = await exifr.parse(file, {gps: true}); } catch { metadata = null; }
+      const metadata = await readLocalExif(file);
       const date = metadata?.DateTimeOriginal instanceof Date && Number.isFinite(metadata.DateTimeOriginal.getTime())
         ? metadata.DateTimeOriginal : new Date(file.lastModified);
       const dateString = localDate(date);
@@ -662,7 +745,8 @@ async function importBatch(selected) {
     for (const entry of additions) { privateFiles.set(entry.file, entry.blob); storedFiles.set(entry.file, entry.blob); }
     hasLocalManifest = true;
     setPhotos(records);
-    status.textContent = `已保存 ${additions.length} 张到本机浏览器${failed ? `，${failed} 张无法读取` : ""}。`;
+    const exifCount = additions.filter(entry => entry.dateSource === "exif").length;
+    status.textContent = `共导入 ${additions.length} 张，其中 ${exifCount} 张使用拍摄时间，${additions.length - exifCount} 张使用文件时间兜底${failed ? `，${failed} 张无法读取` : ""}。`;
   } catch (error) {
     status.textContent = "导入未完成：" + error.message + "。请检查浏览器存储空间。";
   } finally { importing = false; }
